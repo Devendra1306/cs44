@@ -148,7 +148,7 @@ export default function AnswerCard({ answer, isOwner, isAdmin, onVerify, onRejec
 
       {/* Content */}
       <div className="flex-1 min-w-0">
-        <div className="prose prose-sm dark:prose-invert max-w-none text-slate-750 dark:text-slate-300 leading-relaxed">
+        <div className="prose prose-sm dark:prose-invert max-w-none text-slate-800 dark:text-slate-300 leading-relaxed">
           <p className="whitespace-pre-wrap">{answer.content}</p>
         </div>
 
@@ -180,7 +180,7 @@ export default function AnswerCard({ answer, isOwner, isAdmin, onVerify, onRejec
                     <p className="text-xs font-extrabold text-purple-700 dark:text-purple-300 uppercase tracking-wider mb-2 flex items-center gap-1.5">
                       ⚡ Key Insights Summary
                     </p>
-                    <p className="text-xs font-medium text-slate-700 dark:text-slate-350 leading-relaxed italic border-l-2 border-purple-500/50 pl-3">
+                    <p className="text-xs font-medium text-slate-700 dark:text-slate-200 leading-relaxed italic border-l-2 border-purple-500/50 pl-3">
                       "{summarizeText(answer.content)}"
                     </p>
                   </div>
