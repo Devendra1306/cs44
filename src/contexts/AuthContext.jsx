@@ -1,4 +1,4 @@
-import { createContext, useState, useEffect, useCallback } from 'react'
+import { createContext, useState, useEffect, useCallback, useRef } from 'react'
 import { supabase } from '../config/supabase'
 
 export const AuthContext = createContext(undefined)
@@ -7,6 +7,12 @@ export function AuthProvider({ children }) {
   const [user, setUser] = useState(null)
   const [session, setSession] = useState(null)
   const [loading, setLoading] = useState(true)
+  const userRef = useRef(null)
+
+  const setCurrentUser = useCallback((val) => {
+    setUser(val)
+    userRef.current = val
+  }, [])
 
   // Global Fail-Safe loading watchdog: guarantees that the loading spinner
   // can never lock the interface for more than 3.5 seconds under any circumstance.
@@ -64,213 +70,155 @@ export function AuthProvider({ children }) {
           return insertedData
         }
         console.error('Error fetching user profile:', error.message)
-        return null
+        return undefined // Return undefined for database/network errors
       }
       return data
     } catch (err) {
       console.error('Unexpected error fetching profile:', err)
-      return null
+      return undefined // Return undefined for database/network errors
     }
   }, [])
 
   // Listen for auth state changes
   useEffect(() => {
     let mounted = true
-    let currentUserId = null // Prevent async race conditions
+    let subscription = null
     console.log('AnswerHub Auth: Initializing auth subscriber...')
 
-    // Watchdog timer: if loading is stuck at true for more than 4.5 seconds,
-    // it indicates a corrupted session or token refresh hang in localStorage.
-    // We self-heal by clearing localStorage auth keys and performing a one-time recovery reload.
-    const watchdog = setTimeout(() => {
-      if (mounted) {
-        console.warn('AnswerHub Auth: Session loading stuck for 4.5s. Healing corrupted localStorage auth tokens...')
-        if (typeof window !== 'undefined') {
-          try {
-            const reloadCountStr = sessionStorage.getItem('answerhub-auth-recovery-reloads') || '0'
-            const reloadCount = parseInt(reloadCountStr, 10)
-
-            if (reloadCount < 1) {
-              // Store reload count so we only attempt recovery once
-              sessionStorage.setItem('answerhub-auth-recovery-reloads', '1')
-
-              // Clear all Supabase auth keys
-              const keysToRemove = []
-              for (let i = 0; i < localStorage.length; i++) {
-                const key = localStorage.key(i)
-                if (key && (key.includes('sb-') || key.includes('supabase.auth'))) {
-                  keysToRemove.push(key)
-                }
-              }
-              keysToRemove.forEach(key => localStorage.removeItem(key))
-
-              console.log('AnswerHub Auth: Corrupted keys purged. Re-initializing auth client...')
-              window.location.reload()
-            } else {
-              console.error('AnswerHub Auth: Recovery reload already attempted. Halting reload to avoid loop.')
-              setLoading(false)
-            }
-          } catch (e) {
-            console.error('Failed to execute recovery reload:', e)
-            setLoading(false)
-          }
-        }
-      }
-    }, 4500)
-
-    // Get initial session
-    const getInitialSession = async () => {
+    const initializeAuth = async () => {
       try {
+        console.log('AnswerHub Auth: Bootstrapping session...')
         const {
-          data: { session: currentSession },
+          data: { session: initialSession },
           error
         } = await supabase.auth.getSession()
 
         if (error) throw error
 
         if (mounted) {
-          setSession(currentSession)
-          if (currentSession?.user) {
-            console.log('AnswerHub Auth: Found active session for user:', currentSession.user.email)
-            currentUserId = currentSession.user.id
-            const profile = await fetchUserProfile(currentSession.user.id, currentSession.user)
-            if (mounted && currentUserId === currentSession.user.id) {
-              if (!profile) {
-                // Stale/corrupted session from another project. Force sign out to clean localStorage.
-                console.warn('AnswerHub Auth: Initial session is invalid (profile not found/creatable). Force signing out to clean local storage.')
+          setSession(initialSession)
+          if (initialSession?.user) {
+            console.log('AnswerHub Auth: Active session found for user:', initialSession.user.email)
+            const profile = await fetchUserProfile(initialSession.user.id, initialSession.user)
+            if (mounted) {
+              if (profile === null) {
+                console.warn('AnswerHub Auth: Initial session profile not found/creatable. Signing out.')
                 await supabase.auth.signOut()
-                setUser(null)
+                setCurrentUser(null)
                 setSession(null)
+              } else if (profile === undefined) {
+                console.warn('AnswerHub Auth: Network query failed during bootstrap. Using fallback profile metadata.')
+                setCurrentUser({
+                  id: initialSession.user.id,
+                  email: initialSession.user.email,
+                  name: initialSession.user.user_metadata?.name || initialSession.user.user_metadata?.full_name || initialSession.user.email.split('@')[0],
+                  avatar: initialSession.user.user_metadata?.avatar_url || null,
+                  role: 'user'
+                })
               } else {
-                setUser(profile)
+                setCurrentUser(profile)
               }
             }
           } else {
             console.log('AnswerHub Auth: No active session found.')
-            currentUserId = null
-            setUser(null)
+            setCurrentUser(null)
           }
         }
       } catch (err) {
-        console.error('AnswerHub Auth: Error getting initial session, clearing local session keys...', err)
-        // Self-healing: clear localStorage auth keys to recover from stale switches
-        if (typeof window !== 'undefined') {
-          try {
-            const keysToRemove = []
-            for (let i = 0; i < localStorage.length; i++) {
-              const key = localStorage.key(i)
-              if (key && (key.includes('sb-') || key.includes('supabase.auth'))) {
-                keysToRemove.push(key)
-              }
-            }
-            keysToRemove.forEach(key => localStorage.removeItem(key))
-          } catch (e) {
-            console.error('Failed to clear local storage:', e)
-          }
-        }
+        console.error('AnswerHub Auth: Error bootstrapping auth session:', err)
         if (mounted) {
-          currentUserId = null
-          setUser(null)
+          setCurrentUser(null)
           setSession(null)
         }
       } finally {
         if (mounted) {
-          clearTimeout(watchdog)
-          try {
-            sessionStorage.removeItem('answerhub-auth-recovery-reloads')
-          } catch (e) {}
           setLoading(false)
-          console.log('AnswerHub Auth: Initial session load complete. Loading set to false.')
+          console.log('AnswerHub Auth: Bootstrap complete. Loading set to false.')
         }
+      }
+
+      if (!mounted) return
+
+      // Now subscribe to auth changes
+      console.log('AnswerHub Auth: Subscribing to auth state changes...')
+      try {
+        const {
+          data: { subscription: activeSubscription }
+        } = supabase.auth.onAuthStateChange(async (event, newSession) => {
+          if (!mounted) return
+          console.log(`AnswerHub Auth Event: ${event}`)
+          
+          if (event === 'INITIAL_SESSION') {
+            console.log('AnswerHub Auth: Skipping redundant INITIAL_SESSION event.')
+            return
+          }
+
+          setSession(newSession)
+
+          try {
+            if (event === 'SIGNED_IN' && newSession?.user) {
+              const currentUser = userRef.current
+              if (!currentUser || currentUser.id !== newSession.user.id) {
+                setLoading(true)
+                const profile = await fetchUserProfile(newSession.user.id, newSession.user)
+                if (mounted) {
+                  if (profile === null) {
+                    await supabase.auth.signOut()
+                    setCurrentUser(null)
+                    setSession(null)
+                  } else if (profile === undefined) {
+                    setCurrentUser({
+                      id: newSession.user.id,
+                      email: newSession.user.email,
+                      name: newSession.user.user_metadata?.name || newSession.user.user_metadata?.full_name || newSession.user.email.split('@')[0],
+                      avatar: newSession.user.user_metadata?.avatar_url || null,
+                      role: 'user'
+                    })
+                  } else {
+                    setCurrentUser(profile)
+                  }
+                }
+              } else {
+                console.log('AnswerHub Auth: SIGNED_IN event received, but user profile is already loaded. Skipping fetch.')
+              }
+            } else if (event === 'SIGNED_OUT') {
+              if (mounted) {
+                setCurrentUser(null)
+                setSession(null)
+              }
+            } else if ((event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') && newSession?.user) {
+              const profile = await fetchUserProfile(newSession.user.id, newSession.user)
+              if (mounted) {
+                if (profile === null) {
+                  await supabase.auth.signOut()
+                  setCurrentUser(null)
+                  setSession(null)
+                } else if (profile === undefined) {
+                  // Keep current user or fallback
+                } else {
+                  setCurrentUser(profile)
+                }
+              }
+            }
+          } catch (err) {
+            console.error('AnswerHub Auth: Error handling auth state change:', err)
+          } finally {
+            if (mounted) {
+              setLoading(false)
+            }
+          }
+        })
+
+        subscription = activeSubscription
+      } catch (err) {
+        console.error('AnswerHub Auth: Error setting up auth state change listener:', err)
       }
     }
 
-    getInitialSession()
-
-    // Subscribe to auth state changes safely wrapped in try-catch
-    let subscription = null
-    try {
-      const {
-        data: { subscription: activeSubscription },
-      } = supabase.auth.onAuthStateChange(async (event, newSession) => {
-        if (!mounted) return
-        console.log(`AnswerHub Auth Event: ${event}`)
-        setSession(newSession)
-
-        try {
-          if (event === 'SIGNED_IN' && newSession?.user) {
-            currentUserId = newSession.user.id
-            // Only show loading and fetch profile if the user profile isn't already loaded in memory
-            if (!user || user.id !== newSession.user.id) {
-              setLoading(true)
-              const profile = await fetchUserProfile(newSession.user.id, newSession.user)
-              if (mounted && currentUserId === newSession.user.id) {
-                if (!profile) {
-                  console.warn('AnswerHub Auth: SIGNED_IN session is invalid (profile not found/creatable). Force signing out to clean local storage.')
-                  await supabase.auth.signOut()
-                  setUser(null)
-                  setSession(null)
-                } else {
-                  setUser(profile)
-                  console.log('AnswerHub Auth: User signed in successfully. Profile loaded.')
-                }
-              }
-            } else {
-              console.log('AnswerHub Auth: SIGNED_IN event received, but user profile is already loaded in memory. Skipping redundant fetch.')
-            }
-          } else if (event === 'SIGNED_OUT') {
-            currentUserId = null
-            if (mounted) {
-              setUser(null)
-              setSession(null)
-              console.log('AnswerHub Auth: User signed out.')
-            }
-          } else if (event === 'TOKEN_REFRESHED' && newSession?.user) {
-            currentUserId = newSession.user.id
-            const profile = await fetchUserProfile(newSession.user.id, newSession.user)
-            if (mounted && currentUserId === newSession.user.id) {
-              if (!profile) {
-                console.warn('AnswerHub Auth: TOKEN_REFRESHED session is invalid. Force signing out.')
-                await supabase.auth.signOut()
-                setUser(null)
-                setSession(null)
-              } else {
-                setUser(profile)
-                console.log('AnswerHub Auth: Token refreshed.')
-              }
-            }
-          } else if (event === 'USER_UPDATED' && newSession?.user) {
-            currentUserId = newSession.user.id
-            const profile = await fetchUserProfile(newSession.user.id, newSession.user)
-            if (mounted && currentUserId === newSession.user.id) {
-              if (!profile) {
-                console.warn('AnswerHub Auth: USER_UPDATED session is invalid. Force signing out.')
-                await supabase.auth.signOut()
-                setUser(null)
-                setSession(null)
-              } else {
-                setUser(profile)
-                console.log('AnswerHub Auth: User profile updated.')
-              }
-            }
-          }
-        } catch (err) {
-          console.error('AnswerHub Auth: Error handling auth state change:', err)
-        } finally {
-          if (mounted) {
-            clearTimeout(watchdog)
-            setLoading(false)
-          }
-        }
-      })
-      subscription = activeSubscription
-    } catch (err) {
-      console.error('AnswerHub Auth: Error setting up auth state change listener:', err)
-    }
+    initializeAuth()
 
     return () => {
       mounted = false
-      clearTimeout(watchdog)
       if (subscription) {
         subscription.unsubscribe()
       }
@@ -332,7 +280,7 @@ export function AuthProvider({ children }) {
     try {
       const { error } = await supabase.auth.signOut()
       if (error) throw error
-      setUser(null)
+      setCurrentUser(null)
       setSession(null)
       return { error: null }
     } catch (error) {
@@ -373,7 +321,7 @@ export function AuthProvider({ children }) {
 
       if (error) throw error
 
-      setUser(data)
+      setCurrentUser(data)
       return { data, error: null }
     } catch (error) {
       return { data: null, error }
