@@ -1,14 +1,17 @@
 import { useState, useEffect, useRef } from 'react'
 import { motion } from 'framer-motion'
-import { Search, X, Command } from 'lucide-react'
+import { Search, X, Command, Mic, Square } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
+import useTypeahead from '@/hooks/useTypeahead'
 
 export default function SearchBar({ onSearch, variant = 'navbar' }) {
   const [query, setQuery] = useState('')
   const [focused, setFocused] = useState(false)
   const inputRef = useRef(null)
+  const [activeIndex, setActiveIndex] = useState(-1)
   const navigate = useNavigate()
   const debounceRef = useRef(null)
+  const { setQuery: setTaQuery, results, loadingServer } = useTypeahead()
 
   useEffect(() => {
     const handleKeyDown = (e) => {
@@ -28,24 +31,80 @@ export default function SearchBar({ onSearch, variant = 'navbar' }) {
   const handleChange = (e) => {
     const value = e.target.value
     setQuery(value)
+    setTaQuery(value)
 
-    if (debounceRef.current) clearTimeout(debounceRef.current)
-    debounceRef.current = setTimeout(() => {
-      onSearch?.(value)
-    }, 300)
+  const handleChange = (e) => {
+    updateQuery(e.target.value)
   }
+// const { speak } = useTextToSpeech()
+useEffect(() => {
+  if (!query) return
 
-  const handleSubmit = (e) => {
-    e.preventDefault()
-    if (query.trim()) {
-      navigate(`/search?q=${encodeURIComponent(query.trim())}`)
+  if (!isVoiceInput.current) return
+
+  const timeout = setTimeout(async () => {
+    console.log("VOICE AUTO TRIGGER:", query)
+
+    const result = await searchVoiceAnswer(query)
+
+    window.speechSynthesis.cancel()
+
+    if (result?.answer) {
+      speak(result.answer)
+    } else {
+      speak("Sorry, I couldn't find an answer.")
     }
+
+    isVoiceInput.current = false
+  }, 800)
+
+  return () => clearTimeout(timeout)
+}, [query])
+const handleSubmit = async (e) => {
+  e.preventDefault()
+
+  const trimmed = query.trim()
+  if (!trimmed) return
+
+  isVoiceInput.current = true
+
+  console.log("VOICE INPUT:", isVoiceInput.current)
+  console.log("QUERY:", trimmed)
+
+  const result = await searchVoiceAnswer(trimmed)
+
+  console.log("SEARCH RESULT:", result)
+
+  window.speechSynthesis.cancel()
+
+  if (isVoiceInput.current && result?.answer) {
+    speak(result.answer)
+  } else if (isVoiceInput.current) {
+    speak("Sorry, I couldn’t find an answer. Try asking differently.")
   }
 
+  isVoiceInput.current = false
+
+  onSearch?.(trimmed)
+}
   const clearQuery = () => {
     setQuery('')
+    setTaQuery('')
     onSearch?.('')
     inputRef.current?.focus()
+  }
+
+  const toggleDictation = () => {
+    if (!sttSupported) return
+    if (listening) {
+      stop()
+      return
+    }
+     // 🔊 stop voice output when user starts speaking again
+  window.speechSynthesis?.cancel()
+
+    inputRef.current?.focus()
+    start()
   }
 
   const isNavbar = variant === 'navbar'
@@ -66,7 +125,10 @@ export default function SearchBar({ onSearch, variant = 'navbar' }) {
           value={query}
           onChange={handleChange}
           onFocus={() => setFocused(true)}
-          onBlur={() => setFocused(false)}
+          
+          onBlur={() => {
+  setTimeout(() => setFocused(false), 150)
+}}
           placeholder={isNavbar ? 'Search...' : 'Search questions, topics, tags...'}
           className={`
             w-full bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700
@@ -79,7 +141,39 @@ export default function SearchBar({ onSearch, variant = 'navbar' }) {
             }
           `}
         />
+        {/* Suggestions dropdown */}
+        {focused && (results.length > 0 || loadingServer) && (
+          <ul
+            id="typeahead-list"
+            role="listbox"
+            className="absolute left-0 right-0 mt-2 z-50 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-lg overflow-hidden max-h-72 overflow-auto"
+          >
+            {results.map((r, i) => (
+              <li
+                key={r.id}
+                role="option"
+                aria-selected={i === activeIndex}
+                onMouseDown={() => {
+                  navigate(`/question/${r.id}`)
+                }}
+                onMouseEnter={() => setActiveIndex(i)}
+                className={`px-4 py-3 hover:bg-slate-100 dark:hover:bg-slate-700 cursor-pointer ${i === activeIndex ? 'bg-slate-100 dark:bg-slate-700' : ''}`}
+              >
+                <div className="text-sm font-medium text-slate-800 dark:text-white truncate">{r.title}</div>
+                <div className="text-xs text-slate-500 dark:text-slate-400">{r.answer_count ? `${r.answer_count} answers` : ''}</div>
+              </li>
+            ))}
+            {loadingServer && (
+              <li className="px-4 py-3 text-sm text-slate-500">Searching online…</li>
+            )}
+          </ul>
+        )}
         <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-1.5">
+          {listening && (
+    <div className="absolute -top-6 right-0 text-xs text-white-500 animate-pulse whitespace-nowrap">
+      🎙 Listening...
+    </div>
+  )}
           {query && (
             <button
               type="button"
@@ -89,6 +183,24 @@ export default function SearchBar({ onSearch, variant = 'navbar' }) {
               <X className={`text-slate-400 ${isNavbar ? 'w-3.5 h-3.5' : 'w-4 h-4'}`} />
             </button>
           )}
+          <button
+            type="button"
+            onClick={toggleDictation}
+            disabled={!sttSupported}
+            className={`p-0.5 rounded transition-colors ${
+              sttSupported
+                ? 'hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-400'
+                : 'text-slate-300 dark:text-slate-600 cursor-not-allowed'
+            }`}
+            aria-label={listening ? 'Stop voice typing' : 'Start voice typing'}
+            title={sttSupported ? (listening ? 'Stop voice typing' : 'Start voice typing') : 'Voice typing not supported'}
+          >
+            {listening ? (
+              <Square className={`${isNavbar ? 'w-3.5 h-3.5' : 'w-4 h-4'}`} />
+            ) : (
+              <Mic className={`${isNavbar ? 'w-3.5 h-3.5' : 'w-4 h-4'}`} />
+            )}
+          </button>
           {isNavbar && !query && (
             <kbd className="hidden sm:flex items-center gap-0.5 px-1.5 py-0.5 bg-slate-200 dark:bg-slate-700 rounded text-[10px] text-slate-400 font-mono">
               <Command className="w-2.5 h-2.5" />K
@@ -99,3 +211,4 @@ export default function SearchBar({ onSearch, variant = 'navbar' }) {
     </form>
   )
 }
+
