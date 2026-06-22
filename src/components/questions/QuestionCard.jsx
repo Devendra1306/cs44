@@ -16,7 +16,6 @@ import {
 import { useAuth } from '@/hooks/useAuth';
 import { useToast } from '@/components/ui/Toast';
 import { useUpvote } from '@/hooks/useUpvote';
-import { useTextToSpeech } from '@/hooks/useTextToSpeech';
 
 function formatTimeAgo(dateStr) {
   if (!dateStr) return '';
@@ -54,7 +53,6 @@ export default function QuestionCard({ question, index = 0, onFlag }) {
   const { user } = useAuth();
   const { showToast } = useToast();
   const { toggleQuestionUpvote, hasUpvotedQuestion } = useUpvote();
-  const { supported: ttsSupported, speakingId, speak, stop: stopSpeak } = useTextToSpeech();
 
   const [upvoted, setUpvoted] = useState(false);
   const [localUpvotes, setLocalUpvotes] = useState(upvotes || 0);
@@ -90,8 +88,6 @@ export default function QuestionCard({ question, index = 0, onFlag }) {
 
   const author = users || question.author || {};
   const parsedTags = typeof tags === 'string' ? tags.split(',').map((t) => t.trim()).filter(Boolean) : Array.isArray(tags) ? tags : [];
-  const speechId = `question-${id || index}`;
-  const isSpeaking = speakingId === speechId;
 
   return (
     <motion.div
@@ -174,32 +170,9 @@ export default function QuestionCard({ question, index = 0, onFlag }) {
 
           {/* Description preview */}
           {description && (
-            <div className="mt-1.5 flex items-start gap-2">
-              <p className="text-sm text-zinc-500 dark:text-zinc-400 line-clamp-2 leading-relaxed flex-1">
-                {description}
-              </p>
-              <button
-                type="button"
-                onClick={() => {
-                  if (!ttsSupported) return;
-                  if (isSpeaking) {
-                    stopSpeak();
-                    return;
-                  }
-                  speak(description, speechId);
-                }}
-                disabled={!ttsSupported}
-                className={`mt-0.5 inline-flex items-center justify-center rounded-md p-1 transition-colors ${
-                  ttsSupported
-                    ? 'text-indigo-500 hover:text-indigo-600'
-                    : 'text-zinc-400 cursor-not-allowed'
-                }`}
-                aria-label={isSpeaking ? 'Stop readout' : 'Read message'}
-                title={ttsSupported ? (isSpeaking ? 'Stop readout' : 'Read message') : 'Readout not supported'}
-              >
-                {isSpeaking ? <StopCircle className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
-              </button>
-            </div>
+            <p className="mt-1.5 text-sm text-zinc-500 dark:text-zinc-400 line-clamp-2 leading-relaxed">
+              {description}
+            </p>
           )}
 
           {/* Bottom row */}

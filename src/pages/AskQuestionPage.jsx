@@ -9,7 +9,7 @@ import { useQuestions } from '@/hooks/useQuestions'
 import { useToast } from '@/components/ui/Toast'
 import { findDuplicates } from '@/lib/duplicateDetector'
 import { supabase } from '@/config/supabase'
-import { useSpeechToText } from '@/hooks/useSpeechToText'
+
 const tips = [
   { icon: Search, text: 'Search before asking to avoid duplicates' },
   { icon: Lightbulb, text: 'Be specific and provide context' },

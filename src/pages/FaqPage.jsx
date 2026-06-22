@@ -1,7 +1,8 @@
-import { useState } from 'react';
-import { useParams, Link, useNavigate } from 'react-router-dom';
+import { useState, useEffect } from 'react';
+import { useParams, Link } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
+  BookOpen,
   Briefcase,
   GraduationCap,
   FileText,
@@ -11,13 +12,7 @@ import {
   HelpCircle,
   ArrowRight,
   Sparkles,
-  Mic,
-  Square,
-  Volume2,
-  StopCircle,
 } from 'lucide-react';
-import { useSpeechToText } from '@/hooks/useSpeechToText';
-import { useTextToSpeech } from '@/hooks/useTextToSpeech';
 
 const faqCategories = [
   {
@@ -124,25 +119,23 @@ const faqCategories = [
 
 export default function FaqPage() {
   const { id } = useParams();
-  const navigate = useNavigate();
   const [activeCategory, setActiveCategory] = useState(1);
   const [searchQuery, setSearchQuery] = useState('');
   const [expandedIndex, setExpandedIndex] = useState(null);
-  const { supported: sttSupported, listening, start, stop } = useSpeechToText({
-    onResult: (text, meta) => {
-      if (!meta?.isFinal) return;
-      setSearchQuery((prev) => (prev ? `${prev} ${text}` : text));
-    },
-  });
-  const { supported: ttsSupported, speakingId, speak, stop: stopSpeak } = useTextToSpeech();
 
-  const routeCategoryId = id ? parseInt(id, 10) : null;
-  const routeCategoryExists = routeCategoryId
-    ? faqCategories.some((cat) => cat.id === routeCategoryId)
-    : false;
-  const resolvedCategoryId = routeCategoryExists ? routeCategoryId : activeCategory;
+  // Automatically update active category if accessed via specific FAQ ID
+  useEffect(() => {
+    if (id) {
+      const parsedId = parseInt(id, 10);
+      const exists = faqCategories.some((cat) => cat.id === parsedId);
+      if (exists) {
+        setActiveCategory(parsedId);
+        setExpandedIndex(null); // Reset expansions when changing categories
+      }
+    }
+  }, [id]);
 
-  const currentCategory = faqCategories.find((cat) => cat.id === resolvedCategoryId) || faqCategories[0];
+  const currentCategory = faqCategories.find((cat) => cat.id === activeCategory) || faqCategories[0];
   
   // Filter questions across current category or all categories if searching
   const isSearching = searchQuery.trim() !== '';
@@ -190,32 +183,16 @@ export default function FaqPage() {
               placeholder="Search across all rules & guidelines..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full bg-white/10 dark:bg-slate-950/30 backdrop-blur-xl border border-white/20 dark:border-slate-800/80 rounded-2xl pl-12 pr-20 py-3.5 text-sm font-medium text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500/50 transition-all shadow-inner shadow-white/5"
+              className="w-full bg-white/10 dark:bg-slate-950/30 backdrop-blur-xl border border-white/20 dark:border-slate-800/80 rounded-2xl pl-12 pr-4 py-3.5 text-sm font-medium text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500/50 transition-all shadow-inner shadow-white/5"
             />
-            <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-2">
-              {isSearching && (
-                <button
-                  onClick={() => setSearchQuery('')}
-                  className="text-xs font-semibold text-indigo-300 hover:text-indigo-200 transition-colors"
-                >
-                  Clear
-                </button>
-              )}
+            {isSearching && (
               <button
-                type="button"
-                onClick={() => (listening ? stop() : start())}
-                disabled={!sttSupported}
-                className={`p-1 rounded-full border border-white/20 transition-colors ${
-                  sttSupported
-                    ? 'text-indigo-200 hover:text-white hover:bg-white/10'
-                    : 'text-slate-500 cursor-not-allowed'
-                }`}
-                aria-label={listening ? 'Stop voice typing' : 'Start voice typing'}
-                title={sttSupported ? (listening ? 'Stop voice typing' : 'Start voice typing') : 'Voice typing not supported'}
+                onClick={() => setSearchQuery('')}
+                className="absolute right-4 top-1/2 -translate-y-1/2 text-xs font-semibold text-indigo-300 hover:text-indigo-200 transition-colors"
               >
-                {listening ? <Square className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+                Clear
               </button>
-            </div>
+            )}
           </div>
         </div>
       </section>
@@ -243,9 +220,6 @@ export default function FaqPage() {
                       setActiveCategory(cat.id);
                       setSearchQuery('');
                       setExpandedIndex(null);
-                      if (routeCategoryExists) {
-                        navigate('/faq');
-                      }
                     }}
                     className={`w-full flex items-start gap-4 p-4 rounded-xl text-left transition-all duration-200 group ${
                       isActive
@@ -288,9 +262,6 @@ export default function FaqPage() {
                       setActiveCategory(cat.id);
                       setSearchQuery('');
                       setExpandedIndex(null);
-                      if (routeCategoryExists) {
-                        navigate('/faq');
-                      }
                     }}
                     className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-semibold whitespace-nowrap text-sm shrink-0 transition-all ${
                       isActive
@@ -356,8 +327,6 @@ export default function FaqPage() {
               <div className="space-y-3">
                 {filteredQuestions.map((item, idx) => {
                   const isExpanded = expandedIndex === idx;
-                  const speechId = `faq-${idx}`;
-                  const isSpeaking = speakingId === speechId;
                   
                   return (
                     <div
@@ -369,12 +338,11 @@ export default function FaqPage() {
                       }`}
                     >
                       {/* Accordion Trigger */}
-                      <div className="w-full flex items-center justify-between text-left p-4 md:p-5">
-                        <button
-                          type="button"
-                          onClick={() => setExpandedIndex(isExpanded ? null : idx)}
-                          className="flex-1 pr-4 cursor-pointer select-none text-left"
-                        >
+                      <button
+                        onClick={() => setExpandedIndex(isExpanded ? null : idx)}
+                        className="w-full flex items-center justify-between text-left p-4 md:p-5 cursor-pointer select-none"
+                      >
+                        <div className="flex-1 pr-4">
                           {isSearching && item.categoryName && (
                             <span className="inline-block text-[10px] font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/50 px-2 py-0.5 rounded-full mb-1 border border-indigo-500/10">
                               {item.categoryName}
@@ -385,47 +353,13 @@ export default function FaqPage() {
                           }`}>
                             {item.q}
                           </h4>
-                        </button>
-                        <div className="flex items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              if (!ttsSupported) return;
-                              if (isSpeaking) {
-                                stopSpeak();
-                                return;
-                              }
-                              speak(item.a, speechId);
-                            }}
-                            disabled={!ttsSupported}
-                            className={`inline-flex items-center gap-1.5 text-[11px] font-bold transition-colors ${
-                              ttsSupported
-                                ? 'text-indigo-500 hover:text-indigo-600'
-                                : 'text-slate-400 cursor-not-allowed'
-                            }`}
-                            aria-label={isSpeaking ? 'Stop readout' : 'Read answer'}
-                            title={ttsSupported ? (isSpeaking ? 'Stop readout' : 'Read answer') : 'Readout not supported'}
-                          >
-                            {isSpeaking ? (
-                              <StopCircle className="w-3.5 h-3.5" />
-                            ) : (
-                              <Volume2 className="w-3.5 h-3.5" />
-                            )}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setExpandedIndex(isExpanded ? null : idx)}
-                            className="p-0.5 text-slate-400 hover:text-indigo-500 transition-colors"
-                            aria-label={isExpanded ? 'Collapse answer' : 'Expand answer'}
-                          >
-                            <ChevronDown
-                              className={`w-5 h-5 shrink-0 transition-transform duration-300 ${
-                                isExpanded ? 'rotate-180 text-indigo-500' : ''
-                              }`}
-                            />
-                          </button>
                         </div>
-                      </div>
+                        <ChevronDown
+                          className={`w-5 h-5 text-slate-400 shrink-0 transition-transform duration-300 ${
+                            isExpanded ? 'rotate-180 text-indigo-500' : ''
+                          }`}
+                        />
+                      </button>
 
                       {/* Accordion Expandable Content */}
                       <AnimatePresence initial={false}>
@@ -439,47 +373,19 @@ export default function FaqPage() {
                           >
                             <div className="px-5 pb-5 pt-1 border-t border-slate-100 dark:border-slate-700/40 text-xs md:text-sm text-slate-600 dark:text-slate-300 leading-relaxed space-y-2">
                               <p>{item.a}</p>
-                              <div className="flex flex-wrap items-center gap-3 pt-2">
-                                <button
-                                  type="button"
+                              {isSearching && item.categoryId && (
+                                <Link
+                                  to={`/faq/${item.categoryId}`}
                                   onClick={() => {
-                                    if (!ttsSupported) return;
-                                    if (isSpeaking) {
-                                      stopSpeak();
-                                      return;
-                                    }
-                                    speak(item.a, speechId);
+                                    setActiveCategory(item.categoryId);
+                                    setSearchQuery('');
+                                    setExpandedIndex(null);
                                   }}
-                                  disabled={!ttsSupported}
-                                  className={`inline-flex items-center gap-1.5 text-[11px] font-bold transition-colors ${
-                                    ttsSupported
-                                      ? 'text-indigo-500 hover:text-indigo-600'
-                                      : 'text-slate-400 cursor-not-allowed'
-                                  }`}
-                                  aria-label={isSpeaking ? 'Stop readout' : 'Read answer'}
-                                  title={ttsSupported ? (isSpeaking ? 'Stop readout' : 'Read answer') : 'Readout not supported'}
+                                  className="inline-flex items-center gap-1 text-[11px] font-bold text-indigo-500 hover:text-indigo-600 hover:underline pt-2"
                                 >
-                                  {isSpeaking ? (
-                                    <StopCircle className="w-3.5 h-3.5" />
-                                  ) : (
-                                    <Volume2 className="w-3.5 h-3.5" />
-                                  )}
-                                  {isSpeaking ? 'Stop' : 'Read answer'}
-                                </button>
-                                {isSearching && item.categoryId && (
-                                  <Link
-                                    to={`/faq/${item.categoryId}`}
-                                    onClick={() => {
-                                      setActiveCategory(item.categoryId);
-                                      setSearchQuery('');
-                                      setExpandedIndex(null);
-                                    }}
-                                    className="inline-flex items-center gap-1 text-[11px] font-bold text-indigo-500 hover:text-indigo-600 hover:underline"
-                                  >
-                                    View entire category <ArrowRight className="w-3 h-3" />
-                                  </Link>
-                                )}
-                              </div>
+                                  View entire category <ArrowRight className="w-3 h-3" />
+                                </Link>
+                              )}
                             </div>
                           </motion.div>
                         )}
